@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Student Progress Log API</title>
+    <link href="https://cdn.replit.com/agent/bootstrap-agent-dark-theme.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.10.0/font/bootstrap-icons.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container my-5">
+        <div class="row">
+            <div class="col-12">
+                <div class="text-center mb-5">
+                    <h1 class="display-4 mb-3">
+                        <i class="bi bi-journal-text"></i>
+                        Student Progress Log API
+                    </h1>
+                    <p class="lead">Manage student progress logs for machine learning courses</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- API Documentation -->
+        <div class="row mb-5">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title mb-0">
+                            <i class="bi bi-book"></i>
+                            API Documentation
+                        </h3>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-md-4 mb-3">
+                                <div class="card bg-success bg-opacity-10 border-success">
+                                    <div class="card-body">
+                                        <h5 class="card-title text-success">
+                                            <i class="bi bi-plus-circle"></i>
+                                            POST /log
+                                        </h5>
+                                        <p class="card-text">Add a new student progress entry to the log.</p>
+                                        <small class="text-muted">Requires: email, student_id, week, exercise, status, feedback</small>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <div class="card bg-info bg-opacity-10 border-info">
+                                    <div class="card-body">
+                                        <h5 class="card-title text-info">
+                                            <i class="bi bi-list-ul"></i>
+                                            GET /logs
+                                        </h5>
+                                        <p class="card-text">Retrieve all logs with optional filtering.</p>
+                                        <small class="text-muted">Optional params: email, student_id, week</small>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="col-md-4 mb-3">
+                                <div class="card bg-danger bg-opacity-10 border-danger">
+                                    <div class="card-body">
+                                        <h5 class="card-title text-danger">
+                                            <i class="bi bi-trash"></i>
+                                            DELETE /logs
+                                        </h5>
+                                        <p class="card-text">Clear all logs (requires secret key).</p>
+                                        <small class="text-muted">Requires: key parameter</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- API Testing Interface -->
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h3 class="card-title mb-0">
+                            <i class="bi bi-tools"></i>
+                            API Testing Interface
+                        </h3>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <!-- Add Log Form -->
+                            <div class="col-lg-6 mb-4">
+                                <h4 class="mb-3">
+                                    <i class="bi bi-plus-circle text-success"></i>
+                                    Add Progress Log
+                                </h4>
+                                <form id="addLogForm">
+                                    <div class="mb-3">
+                                        <label for="email" class="form-label">Email</label>
+                                        <input type="email" class="form-control" id="email" required>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="studentId" class="form-label">Student ID</label>
+                                        <input type="text" class="form-control" id="studentId" required>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="week" class="form-label">Week</label>
+                                        <input type="text" class="form-control" id="week" placeholder="e.g., Week 2" required>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="exercise" class="form-label">Exercise</label>
+                                        <input type="text" class="form-control" id="exercise" placeholder="e.g., KNN" required>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="status" class="form-label">Status</label>
+                                        <select class="form-select" id="status" required>
+                                            <option value="">Select status</option>
+                                            <option value="completed">Completed</option>
+                                            <option value="in_progress">In Progress</option>
+                                            <option value="not_started">Not Started</option>
+                                            <option value="submitted">Submitted</option>
+                                            <option value="reviewed">Reviewed</option>
+                                        </select>
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="feedback" class="form-label">Feedback</label>
+                                        <textarea class="form-control" id="feedback" rows="3" required></textarea>
+                                    </div>
+                                    <button type="submit" class="btn btn-success">
+                                        <i class="bi bi-plus-lg"></i>
+                                        Add Log Entry
+                                    </button>
+                                </form>
+                            </div>
+
+                            <!-- View/Filter Logs -->
+                            <div class="col-lg-6 mb-4">
+                                <h4 class="mb-3">
+                                    <i class="bi bi-search text-info"></i>
+                                    View & Filter Logs
+                                </h4>
+                                <form id="filterForm" class="mb-3">
+                                    <div class="mb-2">
+                                        <label for="filterEmail" class="form-label">Filter by Email</label>
+                                        <input type="email" class="form-control" id="filterEmail">
+                                    </div>
+                                    <div class="mb-2">
+                                        <label for="filterStudentId" class="form-label">Filter by Student ID</label>
+                                        <input type="text" class="form-control" id="filterStudentId">
+                                    </div>
+                                    <div class="mb-3">
+                                        <label for="filterWeek" class="form-label">Filter by Week</label>
+                                        <input type="text" class="form-control" id="filterWeek">
+                                    </div>
+                                    <div class="d-grid gap-2">
+                                        <button type="submit" class="btn btn-info">
+                                            <i class="bi bi-funnel"></i>
+                                            Apply Filters
+                                        </button>
+                                        <button type="button" class="btn btn-outline-secondary" id="clearFilters">
+                                            <i class="bi bi-x-circle"></i>
+                                            Clear Filters
+                                        </button>
+                                    </div>
+                                </form>
+
+                                <div class="mb-3">
+                                    <h5 class="mb-2">Danger Zone</h5>
+                                    <div class="input-group">
+                                        <input type="password" class="form-control" id="secretKey" placeholder="Secret key">
+                                        <button class="btn btn-danger" type="button" id="deleteLogsBtn">
+                                            <i class="bi bi-trash"></i>
+                                            Clear All Logs
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Results Area -->
+                        <div class="row">
+                            <div class="col-12">
+                                <div class="card">
+                                    <div class="card-header d-flex justify-content-between align-items-center">
+                                        <h5 class="mb-0">
+                                            <i class="bi bi-table"></i>
+                                            Results
+                                        </h5>
+                                        <span class="badge bg-secondary" id="resultCount">0 entries</span>
+                                    </div>
+                                    <div class="card-body">
+                                        <div id="resultsContainer">
+                                            <div class="text-center text-muted">
+                                                <i class="bi bi-inbox display-1"></i>
+                                                <p class="mt-2">No data to display. Add some logs or fetch existing ones.</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
