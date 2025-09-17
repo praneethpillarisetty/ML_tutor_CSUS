@@ -137,6 +137,49 @@ def get_logs():
         logging.error(f"Error in get_logs: {e}")
         return jsonify({"error": "Internal server error"}), 500
 
+@app.route('/logs/all', methods=['GET'])
+def get_all_logs_and_validate():
+    """
+    GET endpoint to fetch ALL logs (no filters) and validate logging/CSV access.
+    - Confirms logger is active by emitting a DEBUG healthcheck line.
+    - Verifies CSV exists and is writable (opens in append mode without writing).
+    """
+    try:
+        # 1) Read all logs
+        all_data = read_csv_data()
+
+        # 2) Validate logging setup (emit a test log)
+        logger = logging.getLogger()
+        test_token = f"healthcheck:{os.getpid()}"
+        logger.debug(f"[HEALTHCHECK] {test_token}")
+
+        # 3) Validate CSV availability and writability (non-destructive open)
+        ensure_csv_exists()
+        csv_exists = os.path.exists(CSV_FILE)
+        csv_writable = False
+        try:
+            with open(CSV_FILE, 'a', encoding='utf-8'):
+                csv_writable = True
+        except Exception as fe:
+            logging.error(f"CSV not writable: {fe}")
+
+        # 4) Return everything
+        return jsonify({
+            "logs": all_data,
+            "total_count": len(all_data),
+            "logging_validation": {
+                "logger_level": logging.getLevelName(logger.level),
+                "handlers": [type(h).__name__ for h in logger.handlers],
+                "csv_exists": csv_exists,
+                "csv_writable": csv_writable,
+                "emitted_test_log_token": test_token
+            }
+        }), 200
+
+    except Exception as e:
+        logging.error(f"Error in /logs/all: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
 @app.route('/logs', methods=['DELETE'])
 def delete_logs():
     """DELETE endpoint to clear logs with secret key protection"""
