@@ -1,214 +1,219 @@
 import os
-import csv
 import json
 import logging
 from flask import Flask, request, jsonify, render_template
 from flask_cors import CORS
 
-# Configure logging
+# Firebase Admin / Firestore
+import firebase_admin
+from firebase_admin import credentials
+from firebase_admin import firestore
+
+# -----------------------------------------------------------------------------
+# App & logging setup
+# -----------------------------------------------------------------------------
 logging.basicConfig(level=logging.DEBUG)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SESSION_SECRET", "default_secret_for_development")
 CORS(app)
 
-# Configuration
-CSV_FILE = "progress_log.csv"
-SECRET_KEY = os.environ.get("DELETE_SECRET", "SECRET123")
-CSV_HEADERS = ["Email", "Student ID", "Week", "Exercise", "Status", "Feedback"]
+# Secrets / config
+DELETE_SECRET = os.environ.get("DELETE_SECRET", "SECRET123")
+COLLECTION = "progress_logs"
 
-def ensure_csv_exists():
-    """Create CSV file with headers if it doesn't exist"""
-    if not os.path.exists(CSV_FILE):
-        with open(CSV_FILE, 'w', newline='', encoding='utf-8') as file:
-            writer = csv.writer(file)
-            writer.writerow(CSV_HEADERS)
-        logging.info(f"Created new CSV file: {CSV_FILE}")
+# -----------------------------------------------------------------------------
+# Firebase initialization (service-account JSON provided via env var)
+# -----------------------------------------------------------------------------
+def init_firebase():
+    """
+    Initialize Firebase Admin SDK using the full JSON pasted in the env var
+    FIREBASE_SERVICE_ACCOUNT_JSON. Do NOT store the JSON file on disk in prod.
+    """
+    if not firebase_admin._apps:
+        sa_json = os.environ.get("FIREBASE_SERVICE_ACCOUNT_JSON")
+        if not sa_json:
+            raise RuntimeError(
+                "FIREBASE_SERVICE_ACCOUNT_JSON env var is missing.\n"
+                "In Firebase Console -> Project settings -> Service accounts -> "
+                "Generate new private key, then paste the entire JSON into this env var."
+            )
+        cred = credentials.Certificate(json.loads(sa_json))
+        firebase_admin.initialize_app(cred)
+    return firestore.client()
 
-def read_csv_data():
-    """Read all data from CSV file and return as list of dictionaries"""
-    ensure_csv_exists()
-    data = []
-    try:
-        with open(CSV_FILE, 'r', encoding='utf-8') as file:
-            reader = csv.DictReader(file)
-            for row in reader:
-                data.append(row)
-    except Exception as e:
-        logging.error(f"Error reading CSV file: {e}")
-        raise
-    return data
+db = init_firebase()
 
-def append_to_csv(data):
-    """Append a single row to the CSV file"""
-    ensure_csv_exists()
-    try:
-        with open(CSV_FILE, 'a', newline='', encoding='utf-8') as file:
-            writer = csv.writer(file)
-            writer.writerow([
-                data['email'],
-                data['student_id'],
-                data['week'],
-                data['exercise'],
-                data['status'],
-                data['feedback']
-            ])
-        logging.info(f"Appended data to CSV: {data['email']}, {data['exercise']}")
-    except Exception as e:
-        logging.error(f"Error writing to CSV file: {e}")
-        raise
+# -----------------------------------------------------------------------------
+# Firestore helpers (mirror your CSV semantics)
+# -----------------------------------------------------------------------------
+def add_progress_row(data: dict):
+    """
+    Insert one log record into Firestore.
+    Normalize a few fields to support case-insensitive filters later.
+    """
+    doc = {
+        "Email": data["email"].strip().lower(),
+        "Student ID": str(data["student_id"]).strip(),
+        "Week": str(data["week"]).strip().lower(),
+        "Exercise": str(data["exercise"]).strip(),
+        "Status": str(data["status"]).strip(),
+        "Feedback": str(data["feedback"]).strip(),
+        "created_at": firestore.SERVER_TIMESTAMP,
+    }
+    db.collection(COLLECTION).add(doc)
+    logging.info(f"[Firestore] Appended: {doc['Email']} / {doc['Exercise']}")
 
-@app.route('/')
+def query_logs(email=None, student_id=None, week=None):
+    """
+    Fetch logs with optional equality filters. Firestore supports chaining
+    equality filters as used here. For larger datasets, consider adding
+    order_by('created_at') and limits.
+    """
+    q = db.collection(COLLECTION)
+    if email:
+        q = q.where("Email", "==", email.strip().lower())
+    if student_id:
+        q = q.where("Student ID", "==", str(student_id).strip())
+    if week:
+        q = q.where("Week", "==", str(week).strip().lower())
+
+    docs = q.stream()
+    return [doc.to_dict() | {"_id": doc.id} for doc in docs]
+
+def get_all_logs():
+    docs = db.collection(COLLECTION).stream()
+    return [doc.to_dict() | {"_id": doc.id} for doc in docs]
+
+def clear_all_logs():
+    """
+    Batch delete all docs in the collection. Commits every ~450 ops to avoid
+    oversized batches/timeouts.
+    """
+    batch = db.batch()
+    count = 0
+    for d in db.collection(COLLECTION).stream():
+        batch.delete(d.reference)
+        count += 1
+        if count % 450 == 0:
+            batch.commit()
+            batch = db.batch()
+    batch.commit()
+    return count
+
+# -----------------------------------------------------------------------------
+# Routes
+# -----------------------------------------------------------------------------
+@app.route("/")
 def index():
-    """Serve the main documentation/testing page"""
-    return render_template('index.html')
-
-@app.route('/log', methods=['POST'])
-def log_progress():
-    """POST endpoint to log student progress"""
+    """
+    Serve your landing page. If 'templates/index.html' doesn't exist, we return
+    a simple OK string instead of a 500.
+    """
     try:
-        # Validate JSON data
+        return render_template("index.html")
+    except Exception:
+        return "OK", 200
+
+@app.route("/log", methods=["POST"])
+def log_progress():
+    """
+    POST: Add a progress log.
+    Body (JSON): { email, student_id, week, exercise, status, feedback }
+    """
+    try:
         if not request.is_json:
             return jsonify({"error": "Content-Type must be application/json"}), 400
-        
         data = request.get_json()
-        
-        # Validate required fields
-        required_fields = ['email', 'student_id', 'week', 'exercise', 'status', 'feedback']
-        for field in required_fields:
-            if field not in data or not data[field]:
-                return jsonify({"error": f"Missing or empty required field: {field}"}), 400
-        
-        # Validate email format (basic check)
-        if '@' not in data['email']:
+
+        required = ["email", "student_id", "week", "exercise", "status", "feedback"]
+        for f in required:
+            if f not in data or not str(data[f]).strip():
+                return jsonify({"error": f"Missing or empty required field: {f}"}), 400
+
+        if "@" not in data["email"]:
             return jsonify({"error": "Invalid email format"}), 400
-        
-        # Validate status field
-        valid_statuses = ['completed', 'in_progress', 'not_started', 'submitted', 'reviewed']
-        if data['status'].lower() not in valid_statuses:
-            logging.warning(f"Non-standard status received: {data['status']}")
-        
-        # Append to CSV
-        append_to_csv(data)
-        
-        return jsonify({
-            "message": "Progress logged successfully",
-            "data": data
-        }), 201
-        
+
+        valid_statuses = {"completed", "in_progress", "not_started", "submitted", "reviewed"}
+        if str(data["status"]).strip().lower() not in valid_statuses:
+            logging.warning(f"[Firestore] Non-standard status: {data['status']}")
+
+        add_progress_row(data)
+        return jsonify({"message": "Progress logged successfully", "data": data}), 201
+
     except Exception as e:
-        logging.error(f"Error in log_progress: {e}")
+        logging.exception("Error in /log")
         return jsonify({"error": "Internal server error"}), 500
 
-@app.route('/logs', methods=['GET'])
-def get_logs():
-    """GET endpoint to retrieve logs with optional filtering"""
+@app.route("/logs", methods=["GET"])
+def get_logs_route():
+    """
+    GET: Retrieve logs with optional filters: ?email=&student_id=&week=
+    """
     try:
-        # Read all data from CSV
-        all_data = read_csv_data()
-        
-        # Apply filters based on query parameters
-        email_filter = request.args.get('email')
-        student_id_filter = request.args.get('student_id')
-        week_filter = request.args.get('week')
-        
-        filtered_data = all_data
-        
-        if email_filter:
-            filtered_data = [row for row in filtered_data if row['Email'].lower() == email_filter.lower()]
-        
-        if student_id_filter:
-            filtered_data = [row for row in filtered_data if row['Student ID'] == student_id_filter]
-        
-        if week_filter:
-            filtered_data = [row for row in filtered_data if row['Week'].lower() == week_filter.lower()]
-        
+        email = request.args.get("email")
+        student_id = request.args.get("student_id")
+        week = request.args.get("week")
+
+        logs = query_logs(email=email, student_id=student_id, week=week)
         return jsonify({
-            "logs": filtered_data,
-            "total_count": len(filtered_data),
-            "filters_applied": {
-                "email": email_filter,
-                "student_id": student_id_filter,
-                "week": week_filter
-            }
+            "logs": logs,
+            "total_count": len(logs),
+            "filters_applied": {"email": email, "student_id": student_id, "week": week},
         }), 200
-        
+
     except Exception as e:
-        logging.error(f"Error in get_logs: {e}")
+        logging.exception("Error in GET /logs")
         return jsonify({"error": "Internal server error"}), 500
 
-@app.route('/logs/all', methods=['GET'])
+@app.route("/logs/all", methods=["GET"])
 def get_all_logs_and_validate():
     """
-    GET endpoint to fetch ALL logs (no filters) and validate logging/CSV access.
-    - Confirms logger is active by emitting a DEBUG healthcheck line.
-    - Verifies CSV exists and is writable (opens in append mode without writing).
+    GET: Fetch ALL logs (no filters) and emit a healthcheck log token.
     """
     try:
-        # 1) Read all logs
-        all_data = read_csv_data()
-
-        # 2) Validate logging setup (emit a test log)
+        logs = get_all_logs()
         logger = logging.getLogger()
         test_token = f"healthcheck:{os.getpid()}"
         logger.debug(f"[HEALTHCHECK] {test_token}")
-
-        # 3) Validate CSV availability and writability (non-destructive open)
-        ensure_csv_exists()
-        csv_exists = os.path.exists(CSV_FILE)
-        csv_writable = False
-        try:
-            with open(CSV_FILE, 'a', encoding='utf-8'):
-                csv_writable = True
-        except Exception as fe:
-            logging.error(f"CSV not writable: {fe}")
-
-        # 4) Return everything
         return jsonify({
-            "logs": all_data,
-            "total_count": len(all_data),
+            "logs": logs,
+            "total_count": len(logs),
             "logging_validation": {
                 "logger_level": logging.getLevelName(logger.level),
                 "handlers": [type(h).__name__ for h in logger.handlers],
-                "csv_exists": csv_exists,
-                "csv_writable": csv_writable,
+                "firestore_ok": True,
                 "emitted_test_log_token": test_token
             }
         }), 200
-
     except Exception as e:
-        logging.error(f"Error in /logs/all: {e}")
+        logging.exception("Error in GET /logs/all")
         return jsonify({"error": "Internal server error"}), 500
 
-@app.route('/logs', methods=['DELETE'])
+@app.route("/logs", methods=["DELETE"])
 def delete_logs():
-    """DELETE endpoint to clear logs with secret key protection"""
+    """
+    DELETE: Clear all logs. Requires ?key=DELETE_SECRET
+    """
     try:
-        # Check for secret key
-        provided_key = request.args.get('key')
-        
+        provided_key = request.args.get("key")
         if not provided_key:
             return jsonify({"error": "Secret key required"}), 400
-        
-        if provided_key != SECRET_KEY:
+        if provided_key != DELETE_SECRET:
             logging.warning(f"Invalid delete attempt with key: {provided_key}")
             return jsonify({"error": "Invalid secret key"}), 403
-        
-        # Clear the CSV file (recreate with just headers)
-        with open(CSV_FILE, 'w', newline='', encoding='utf-8') as file:
-            writer = csv.writer(file)
-            writer.writerow(CSV_HEADERS)
-        
-        logging.info("Progress logs cleared successfully")
-        
-        return jsonify({
-            "message": "All progress logs have been cleared successfully"
-        }), 200
-        
+
+        deleted = clear_all_logs()
+        logging.info(f"[Firestore] Deleted {deleted} documents")
+        return jsonify({"message": f"All progress logs cleared ({deleted} docs)"}), 200
+
     except Exception as e:
-        logging.error(f"Error in delete_logs: {e}")
+        logging.exception("Error in DELETE /logs")
         return jsonify({"error": "Internal server error"}), 500
 
+# -----------------------------------------------------------------------------
+# Error handlers
+# -----------------------------------------------------------------------------
 @app.errorhandler(404)
 def not_found(error):
     return jsonify({"error": "Endpoint not found"}), 404
@@ -217,5 +222,10 @@ def not_found(error):
 def method_not_allowed(error):
     return jsonify({"error": "Method not allowed"}), 405
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+# -----------------------------------------------------------------------------
+# Entrypoint
+# -----------------------------------------------------------------------------
+if __name__ == "__main__":
+    # In production on Render, they set the PORT env var.
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port, debug=True)
